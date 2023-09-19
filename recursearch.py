@@ -23,23 +23,24 @@ BINARY_TEXT_ENCODINGS = [
 ]
 
 LOG_LEVEL = 1
+INDENT = "  "
 INDENT_LEVEL = 0
 
 found_paths: List[str] = []
 
 def info(msg: str):
     if LOG_LEVEL <= 1:
-        print(" " * INDENT_LEVEL + msg)
+        print(INDENT * INDENT_LEVEL + msg)
 
 def warn(msg: str):
-    print(Fore.YELLOW + " " * INDENT_LEVEL + msg)
+    print(Fore.YELLOW + INDENT * INDENT_LEVEL + msg)
 
 def error(msg: str):
-    print(Fore.RED + " " * INDENT_LEVEL + msg)
+    print(Fore.RED + INDENT * INDENT_LEVEL + msg)
     sys.exit(1)
 
 def success(msg: str):
-    print(Fore.GREEN + " " * INDENT_LEVEL + msg)
+    print(Fore.GREEN + INDENT * INDENT_LEVEL + msg)
 
 def handle_tar(semantic_path: Path, path: Path, string: str):
     info("Extracting tar " + str(path))
@@ -49,7 +50,7 @@ def handle_tar(semantic_path: Path, path: Path, string: str):
         except EOFError:
             warn("Failed to extract tar " + str(path))
             return
-        search(semantic_path, Path(tempdir), string)
+        handle_dir(semantic_path, Path(tempdir), string)
 
 def handle_zip(semantic_path: Path, path: Path, string: str):
     info("Extracting zip " + str(path))
@@ -57,7 +58,7 @@ def handle_zip(semantic_path: Path, path: Path, string: str):
     with tempfile.TemporaryDirectory() as tempdir:
         with zipfile.ZipFile(path, "r") as zip_ref:
             zip_ref.extractall(tempdir)
-        search(semantic_path, Path(tempdir), string)
+        handle_dir(semantic_path, Path(tempdir), string)
 
 def handle_7z(semantic_path: Path, path: Path, string: str):
     info("Extracting 7z " + str(path))
@@ -69,7 +70,7 @@ def handle_7z(semantic_path: Path, path: Path, string: str):
         except py7zr.UnsupportedCompressionMethodError:
             warn("Failed to extract 7z " + str(path))
             return
-        search(semantic_path, Path(tempdir), string)
+        handle_dir(semantic_path, Path(tempdir), string)
 
 def handle_rar(semantic_path: Path, path: Path, string: str):
     info("Extracting rar " + str(path))
@@ -81,7 +82,7 @@ def handle_rar(semantic_path: Path, path: Path, string: str):
         except rarfile.BadRarFile:
             warn("Failed to extract rar " + str(path))
             return
-        search(semantic_path, Path(tempdir), string)
+        handle_dir(semantic_path, Path(tempdir), string)
 
 def handle_bin(semantic_path: Path, path: Path, string: str) -> bool:
     with open(path, "rb") as f:
@@ -103,33 +104,36 @@ def handle_text(semantic_path: Path, path: Path, string: str):
         pass
     return False
 
-def search(semantic_path: Path, path: Path, string: str):
-    global INDENT_LEVEL
+def handle_file(semantic_path: Path, file_path: Path, string: str):
+    if string in str(file_path):
+        success("Found " + string + " in filename: " + str(file_path))
+        found_paths.append(str(file_path))
+
+    if tarfile.is_tarfile(file_path):
+        handle_tar(semantic_path, file_path, string)
+    elif zipfile.is_zipfile(file_path):
+        handle_zip(semantic_path, file_path, string)
+    elif py7zr.is_7zfile(file_path):
+        handle_7z(semantic_path, file_path, string)
+    elif rarfile.is_rarfile(file_path):
+        handle_rar(semantic_path, file_path, string)
+    else:
+        found = handle_bin(semantic_path, file_path, string)
+        if not found:
+            handle_text(semantic_path, file_path, string)
+
+
+def handle_dir(semantic_path: Path, path: Path, string: str):
     info("Entering " + str(semantic_path))
     """Search for a string recursively in a directory of files, extracting archives as needed"""
     
+    global INDENT_LEVEL
+    INDENT_LEVEL += 1
     for root, dirs, files in os.walk(path):
         for file in files:
             file_path = Path(root) / file
-
-            if string in str(file_path):
-                success("Found " + string + " in filename: " + str(file_path))
-                found_paths.append(str(file_path))
-
-            INDENT_LEVEL += 1
-            if tarfile.is_tarfile(file_path):
-                handle_tar(semantic_path / file, file_path, string)
-            elif zipfile.is_zipfile(file_path):
-                handle_zip(semantic_path / file, file_path, string)
-            elif py7zr.is_7zfile(file_path):
-                handle_7z(semantic_path / file, file_path, string)
-            elif rarfile.is_rarfile(file_path):
-                handle_rar(semantic_path / file, file_path, string)
-            else:
-                found = handle_bin(semantic_path / file, file_path, string)
-                if not found:
-                    handle_text(semantic_path / file, file_path, string)
-            INDENT_LEVEL -= 1
+            handle_file(semantic_path / file, file_path, string)
+    INDENT_LEVEL -= 1
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -140,4 +144,8 @@ if __name__ == "__main__":
 
     string = args.string
     path = args.path
-    search(path, path, string)
+
+    if path.is_file():
+        handle_file(path, path, string)
+    else:
+        handle_dir(path, path, string)
